@@ -1,0 +1,144 @@
+import java.time.LocalDate
+
+properties([
+        parameters([
+                [$class: 'DynamicReferenceParameter', choiceType: 'ET_FORMATTED_HTML', name: 'Cores', description: 'Number of licensed cores',
+                 referencedParameters: 'Tier',
+                 script: [
+                         $class: 'GroovyScript',
+                         fallbackScript: [
+                                 classpath: [],
+                                 sandbox: true,
+                                 script: 'return ["ERROR"]'
+                         ],
+                         script: [
+                                 classpath: [],
+                                 sandbox  : true,
+                                 script : buildCoreSelectorScript()
+                         ]
+                 ]
+                ],
+                [$class: 'DynamicReferenceParameter', choiceType: 'ET_FORMATTED_HTML', name: 'Accounts', description: 'User Accounts to Create',
+                 referencedParameters: 'Tier',
+                 script: [
+                         $class: 'GroovyScript',
+                         fallbackScript: [
+                                 classpath: [],
+                                 sandbox: true,
+                                 script: 'return ["ERROR"]'
+                         ],
+                         script: [
+                                 classpath: [],
+                                 sandbox  : true,
+                                 script : buildUsersTable()
+                         ]
+                 ]
+                ]
+        ])
+])
+
+pipeline {
+    agent any
+
+    options {
+        buildDiscarder logRotator(
+            artifactDaysToKeepStr: "30",
+            artifactNumToKeepStr: "100",
+            daysToKeepStr: "90",
+            numToKeepStr: "200"
+        )
+        disableConcurrentBuilds()
+        timeout(time: 10, unit: 'MINUTES')
+        timestamps()
+    }
+
+    environment {
+        ZENDESK_API_URL = ""
+        NEXUS_URL = "${SERVICE_NEXUS_URL}"
+        NEXUS_REPOSITORY_URL = "${SERVICE_APPS_REPOSITORY}"
+        GROUP_ID = 'fish.payara.support.infrastructure'
+        ARTIFACT_ID = 'CustomerManager'
+        APPLICATION_VERSION = '1.0-SNAPSHOT'
+        APPLICATION_ARTIFACT_URL = "https://${SERVICE_NEXUS_URL}/service/rest/v1/search/assets/download?sort=version&repository=${SERVICE_APPS_REPOSITORY}&maven.groupId=${GROUP_ID}&maven.artifactId=${ARTIFACT_ID}&maven.classifier=uber&maven.baseVersion=${APPLICATION_VERSION}"
+    }
+
+    parameters {
+        string name: 'Name', description: 'The organization\'s name', trim: true
+        text name: 'Domain Names', description: 'The domain names to be assigned to this organization. Put each domain in a separate line'
+        string name: 'Onboarding Date', defaultValue: "${LocalDate.now().toString()}", description: 'Date this organisation was onboarded in the format yyyy-MM-dd', trim: true
+        choice name: 'Region', choices: ['Americas', 'EMEA', 'APAC'], description: 'The geographic region/zone'
+        choice name: 'Tier', choices: ['24x7', '10x5', 'Hybrid', 'Migration & Project'], description: 'Indicates the entitlement level (support tier)'
+    }
+
+    stages {
+        stage('Download Application Artifact'){
+            steps {
+                echo "Download artifact from ${APPLICATION_ARTIFACT_URL}"
+                httpRequest(
+                        authentication: 'nexus-support',
+                        responseHandle: 'NONE',
+                        url: "${APPLICATION_ARTIFACT_URL}",
+                        wrapAsMultipart: false,
+                        outputFile: "${ARTIFACT_ID}-uber.jar"
+                )
+            }
+        }
+        stage('Run Customer Onboarding command'){
+            steps{
+                script {
+                    //Remove trailing , from the accounts field
+                    users = "${Accounts}".substring(0, "${Accounts}".length() - 1)
+
+                    //Build application command
+                    command = """\
+                       java -jar ${ARTIFACT_ID}-uber.jar onboard -name "${Name}" -domains "${params['Domain Names']}" -date "${params['Onboarding Date']}" -region ${Region} -tier ${Tier} -cores "${Cores}" -users "${users}"
+                    """.stripIndent()
+                    sh command
+                }
+            }
+        }
+    }
+}
+
+static String buildCoreSelectorScript() {
+    return '''
+        def htmlToRender = """
+                    <tr>
+                        <td><label class="">${Tier != "Hybrid" ? "Number" : "24 x 7"}</label></td>
+                        <td><input type="text" class="" name="value" value="10"></td>
+                    </tr>
+        """
+        if (Tier == "Hybrid") {
+            htmlToRender = """
+                    ${htmlToRender}
+                    <tr>
+                        <td><label class="">10 x 5</label></td>
+                        <td><input type="text" class="" name="value" value="10"></td>
+                    </tr>
+            """
+        }
+        return "<table>${htmlToRender}</table>"
+    '''
+}
+
+static String buildUsersTable(){
+    return '''
+        def htmlToRender = ""
+        def maxUsers = Tier == "Hybrid" || Tier == "24x7" ? 5 : 2
+        for(int i = 1; i <= maxUsers; i++){
+            htmlToRender = """
+                ${htmlToRender}
+                <tr>
+                    <td>Account #${i}:</td>
+                    <td><label class="">Email</label></td>
+                    <td><input type="email" class="" name="value" value=""></td>
+                    <td><label class="">Name</label></td>
+                    <td><input type="text" class="" name="value" value=""></td>
+                    <td><label class="">Details</label></td>
+                    <td><input type="text" class="" name="value" value="" size="100"></td>
+                </tr>
+            """
+        }
+        return "<table>${htmlToRender}</table>"
+    '''
+}

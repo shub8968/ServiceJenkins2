@@ -1,0 +1,62 @@
+pipeline{
+    agent any
+
+    tools {
+        maven "Default"
+    }
+
+    environment{
+        PAYARA_ENTERPRISE_DOCKER_REGISTRY = 'http://13.43.158.167:8081/repository/payara-docker/'
+        GROUP_ID_PREFIX = 'fish.payara'
+    }
+
+    parameters {
+        choice name: 'Edition', choices: ['Community', 'Enterprise'], description: 'Which edition the version in place correspond to'
+        validatingString(
+                description: 'Payara Platform Version',
+                name: 'Version',
+                regex:  /^([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+)?$/,
+                failedValidationMessage: 'Value should correspond to semantic versioning'
+        )
+    }
+
+    stages {
+        stage('Retrieve Payara Platform Maven Artifacts') {
+            steps {
+                withMaven(mavenSettingsConfig: "${params['Edition'].toLowerCase()}-mvn-settings") {
+                    script{
+                        if(params['Version'] == null){
+                            error 'No Payara Platform Version supplied'
+                        }
+                        echo "Retrieving Payara Platform ${Version} artifacts"
+                        def artifacts = [
+                                ["${GROUP_ID_PREFIX}.distributions", 'payara', 'zip'],
+                                ["${GROUP_ID_PREFIX}.distributions", 'payara-web', 'zip'],
+                                ["${GROUP_ID_PREFIX}.extras", 'payara-micro', 'jar'],
+                                ["${GROUP_ID_PREFIX}.extras", 'payara-embedded-all', 'jar'],
+                                ["${GROUP_ID_PREFIX}.extras", 'payara-embedded-web', 'jar'],
+                                ["${GROUP_ID_PREFIX}.api", 'payara-api', 'jar']
+                        ]
+                        if(params['Edition'] == 'Enterprise'){
+                            artifacts.add(["${GROUP_ID_PREFIX}.extras", 'payara-source', 'zip']);
+                        }
+                        for(artifact in artifacts) {
+                            sh "mvn org.apache.maven.plugins:maven-dependency-plugin:3.6.0:get -DgroupId=${artifact[0]} -DartifactId=${artifact[1]} -Dversion=${Version} -Dpackaging=${artifact[2]} -DremoteRepositories=payara-enterprise"
+                        }
+                    }
+                }
+            }
+        }
+        /*stage('Retrieve Payara Platform Docker Images'){
+            steps{
+                sh 'docker ps'
+                script {
+                    docker.withRegistry(PAYARA_ENTERPRISE_DOCKER_REGISTRY, 'nexus-support'){
+                        def image = docker.image("payara-server:${Version}")
+                        image.pull()
+                    }
+                }
+            }
+        }*/
+    }
+}

@@ -1,0 +1,64 @@
+pipeline {
+    agent any
+
+    tools {
+        //jdk "JDK17"
+        maven "Default"
+    }
+
+    environment {
+        NEXUS_VERSION = "nexus3"
+        NEXUS_PROTOCOL = "http"
+        NEXUS_URL = "${SERVICE_NEXUS_URL}"
+        NEXUS_REPOSITORY = "${SERVICE_APPS_REPOSITORY}"
+    }
+
+    stages {
+        stage("Clone Git Repository"){
+            steps {
+                script {
+                    git branch: 'main',
+                            url: 'https://github.com/payara/customer-infra-manager',
+                            credentialsId: 'payara-github'
+                }
+            }
+        }
+        stage("Maven Build") {
+            steps {
+                script {
+                    withMaven {
+                        sh "mvn package -DskipTests=true"
+                    }
+                }
+            }
+        }
+        stage("Publish to Service Nexus"){
+            steps{
+                script {
+                    pom = readMavenPom file: "pom.xml";
+                    echo "Uploading ${pom.artifactId}-${pom.version} JAR artifacts to Nexus Repository ${NEXUS_REPOSITORY}"
+                    nexusArtifactUploader(
+                            nexusVersion: NEXUS_VERSION,
+                            protocol: NEXUS_PROTOCOL,
+                            nexusUrl: NEXUS_URL,
+                            credentialsId: 'nexus-support',
+                            repository: NEXUS_REPOSITORY,
+                            groupId: pom.groupId,
+                            version: pom.version,
+                            artifacts: [
+                                    [artifactId: pom.artifactId,
+                                     type : "jar",
+                                     file: "target/${pom.artifactId}-${pom.version}.jar"
+                                    ],
+                                    [artifactId: pom.artifactId,
+                                     type : "jar",
+                                     classifier: "uber",
+                                     file: "target/${pom.artifactId}-${pom.version}-uber.jar"
+                                    ]
+                            ]
+                    )
+                }
+            }
+        }
+    }
+}
